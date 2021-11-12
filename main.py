@@ -14,7 +14,7 @@ def prepare_dataset():
 
     X = cancer_data.drop(['id'], axis=1)
     X = X.drop(['diagnosis'], axis=1)
-    # X = X[['radius_mean','texture_mean','perimeter_mean','area_mean','smoothness_mean','compactness_mean','concavity_mean']]
+    X = X[['radius_mean','texture_mean','perimeter_mean','area_mean','smoothness_mean','compactness_mean','concavity_mean']]
 
     y = cancer_data['diagnosis']
 
@@ -24,7 +24,7 @@ def prepare_dataset():
 def reshape_dataset(X, y):
     scaler = StandardScaler()
     X = scaler.fit_transform(X)
-    X = X.reshape(len(X), 30, 1)
+    X = X.reshape(len(X), 7, 1)
 
     y = LabelEncoder().fit_transform(y)
 
@@ -35,7 +35,7 @@ def design_model(outputBias=None):
     if outputBias is not None:
         outputBias = tf.constant_initializer(outputBias)
     model = tf.keras.models.Sequential()
-    model.add(tf.keras.layers.Conv1D(filters=64, kernel_size=2, activation='relu', input_shape=(30, 1)))
+    model.add(tf.keras.layers.Conv1D(filters=64, kernel_size=2, activation='relu', input_shape=(7, 1)))
     model.add(tf.keras.layers.BatchNormalization())
     model.add(tf.keras.layers.Dropout(0.2))
 
