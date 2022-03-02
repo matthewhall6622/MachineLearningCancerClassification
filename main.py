@@ -3,24 +3,16 @@ from matplotlib import pyplot as plt
 from sklearn.model_selection import train_test_split
 import numpy as np
 import tensorflow as tf
+from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
 
-from sklearn.model_selection import GridSearchCV
-from sklearn.model_selection import RandomizedSearchCV
-from scipy.stats import randint as sp_randint
-from keras.wrappers.scikit_learn import KerasRegressor
-from sklearn.metrics import mean_squared_error
-from sklearn.metrics import make_scorer
+bs = 32
 
 
 def prepare_dataset():
     cancer_data = pd.read_csv("BreastCancerData.csv", encoding='latin-1', engine='python')
-
-    # plt.figure(figsize=(25, 25))
-    # sns.heatmap(cancer_data.corr(), vmin=-1, vmax=1, annot=True)
-    # plt.show()
 
     # replace diagnosis labels with binary labels
     cancer_data["diagnosis"].replace({"M": 1, "B": 0}, inplace=True)
@@ -45,24 +37,35 @@ def reshape_dataset(X, y):
     return X, y
 
 
+early_stopping = tf.keras.callbacks.EarlyStopping(
+    monitor='accuracy',
+    verbose=1,
+    patience=30,
+    mode='max',
+    restore_best_weights=True)
+
+
 def design_model(outputBias=None):
     if outputBias is not None:
         outputBias = tf.constant_initializer(outputBias)
     model = tf.keras.models.Sequential()
 
     # ReLU activation used in
-    model.add(tf.keras.layers.Conv1D(filters=32, kernel_size=2, activation='relu', input_shape=(6, 1)))
-    # drops random nodes
-    # helps prevent overwriting as cannot be dependent on any one node as it could be dropped during training
-    model.add(tf.keras.layers.Dropout(0.3))
-
-    model.add(tf.keras.layers.Conv1D(filters=32, kernel_size=2, activation='relu'))
-    model.add(tf.keras.layers.BatchNormalization())
-    model.add(tf.keras.layers.Dropout(0.2))
-
-    model.add(tf.keras.layers.Flatten())
+    model.add(tf.keras.layers.Conv1D(filters=3, kernel_size=3, activation='relu', padding='same', input_shape=(6, 1)))
+    model.add(tf.keras.layers.Conv1D(filters=3, kernel_size=3, activation='relu', padding='same'))
+    model.add(tf.keras.layers.MaxPooling1D())
 
     model.add(tf.keras.layers.Dense(64, activation='relu'))
+    model.add(tf.keras.layers.Dropout(0.2))
+    # model.add(tf.keras.layers.BatchNormalization())
+    model.add(tf.keras.layers.Dense(32, activation='relu'))
+    model.add(tf.keras.layers.Dropout(0.2))
+    # model.add(tf.keras.layers.BatchNormalization())
+    model.add(tf.keras.layers.Dense(8, activation='relu'))
+    model.add(tf.keras.layers.Dropout(0.2))
+    # model.add(tf.keras.layers.BatchNormalization())
+
+    model.add(tf.keras.layers.Flatten())
 
     # Dense layer of 1 as output is binary
     # Sigmoid activation function used to predict the probability between range of 1 and 0, suitable for binary output
@@ -77,11 +80,17 @@ X, y = prepare_dataset()  # X is data, y are the data's labels
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=0.33, random_state=42, stratify=y)
 model = design_model()
+model.summary()
+
+weight_for_benign = (1 / 357) * (569 / 2.0)
+weight_for_malignant = (1 / 212) * (569 / 2.0)
+
+class_weight = {0: weight_for_benign, 1: weight_for_malignant}
 
 X_train, y_train = reshape_dataset(X_train, y_train)
 X_test, y_test = reshape_dataset(X_test, y_test)
-history = model.fit(X_train, y_train, verbose=1, epochs=75, batch_size=16,
-                    validation_data=(X_test, y_test))
+history = model.fit(X_train, y_train, verbose=1, epochs=250, batch_size=bs,
+                    validation_data=(X_test, y_test), class_weight=class_weight, callbacks=early_stopping)
 
 loss = history.history['loss']
 val_loss = history.history['val_loss']
@@ -133,58 +142,12 @@ def plot_cm(labels, predictions, p=0.5):
     print("Specificity (true negative rate): ", specificity)
 
 
-test_predictions_baseline = model.predict(X_test, batch_size=16)
+test_predictions_baseline = model.predict(X_test, batch_size=bs)
+
 baseline_results = model.evaluate(X_test, y_test,
-                                  batch_size=16, verbose=0)
+                                  batch_size=bs, verbose=0)
 for name, value in zip(model.metrics_names, baseline_results):
     print(name, ': ', value)
 print()
 
 plot_cm(y_test, test_predictions_baseline)
-
-
-def do_grid_search():
-    batch_size = [6, 64]
-    epochs = [10, 50]
-    model = KerasRegressor(build_fn=history)
-    param_grid = dict(batch_size=batch_size, epochs=epochs)
-    grid = GridSearchCV(estimator=model, param_grid=param_grid,
-                        scoring=make_scorer(mean_squared_error, greater_is_better=False), return_train_score=True)
-    grid_result = grid.fit(X_train, y_train, verbose=0)
-    print(grid_result)
-    print("Best: %f using %s" % (grid_result.best_score_, grid_result.best_params_))
-
-    means = grid_result.cv_results_['mean_test_score']
-    stds = grid_result.cv_results_['std_test_score']
-    params = grid_result.cv_results_['params']
-    for mean, stdev, param in zip(means, stds, params):
-        print("%f (%f) with: %r" % (mean, stdev, param))
-
-    print("Traininig")
-    means = grid_result.cv_results_['mean_train_score']
-    stds = grid_result.cv_results_['std_train_score']
-    for mean, stdev, param in zip(means, stds, params):
-        print("%f (%f) with: %r" % (mean, stdev, param))
-
-
-# ------------- RANDOMIZED SEARCH --------------
-def do_randomized_search():
-    param_grid = {'batch_size': sp_randint(2, 16), 'nb_epoch': sp_randint(10, 100)}
-    model = KerasRegressor(build_fn=history)
-    grid = RandomizedSearchCV(estimator=model, param_distributions=param_grid,
-                              scoring=make_scorer(mean_squared_error, greater_is_better=False), n_iter=12)
-    grid_result = grid.fit(X_train, y_train, verbose=0)
-    print(grid_result)
-    print("Best: %f using %s" % (grid_result.best_score_, grid_result.best_params_))
-
-    means = grid_result.cv_results_['mean_test_score']
-    stds = grid_result.cv_results_['std_test_score']
-    params = grid_result.cv_results_['params']
-    for mean, stdev, param in zip(means, stds, params):
-        print("%f (%f) with: %r" % (mean, stdev, param))
-
-
-print("-------------- GRID SEARCH --------------------")
-do_grid_search()
-print("-------------- RANDOMIZED SEARCH --------------------")
-do_randomized_search()
